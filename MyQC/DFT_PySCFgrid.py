@@ -119,4 +119,3 @@ else:
     print("SCF成功收敛")
     print(f"DFT能量 = {E_KS:12.8f} Hartree, 耗时{y-x:4.4f}s")
 
-mf_hf.kernel()
