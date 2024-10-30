@@ -79,16 +79,16 @@ def solve_RHF(xyz,basis,charge=0):
             print("SCF 收敛")
             print(f"Hartree-Fock能量: {E_HF:.8f} Hartree")
     return E_HF,C_,E,I,nocc
+if __name__ =='__main__':
+    E_HF,mo,mo_ene,eri,nocc = solve_RHF('''
+    C                 -0.66295800    0.00000000   -0.00000000
+    C                  0.66295800    0.00000000   -0.00000000
+    H                 -1.25654334    0.92403753    0.00000000
+    H                 -1.25654334   -0.92403753    0.00000000
+    H                  1.25654334   -0.92403753    0.00000000
+    H                  1.25654334    0.92403753   -0.00000000
+    ''','def2-TZVP')
 
-E_HF,mo,mo_ene,eri,nocc = solve_RHF('''
- C                 -0.66295800    0.00000000   -0.00000000
- C                  0.66295800    0.00000000   -0.00000000
- H                 -1.25654334    0.92403753    0.00000000
- H                 -1.25654334   -0.92403753    0.00000000
- H                  1.25654334   -0.92403753    0.00000000
- H                  1.25654334    0.92403753   -0.00000000
-''','def2-TZVP')
-
-E_corr = solve_MP2(eri,mo,mo_ene,nocc)
-print(f"总能量：{E_HF+E_corr:.8f} Hartree")
+    E_corr = solve_MP2(eri,mo,mo_ene,nocc)
+    print(f"总能量：{E_HF+E_corr:.8f} Hartree")
 

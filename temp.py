@@ -1,63 +1,7 @@
-from pyscf import gto,dft
 import numpy as np
-from functools import partial
-from math import pi
+from pyscf import gto,dft,tdscf
 import time
 
-# 使用贪心算法(greedy算法)，并限制内存为4GB
-np.einsum = partial(np.einsum,optimize=["greedy", 1024 ** 3 * 4 / 8])
-
-def E_VV10(rho_01,b,C,grids):
-    weights = grids.weights
-    rho_0 = rho_01[0]*weights
-    rho_1 = rho_01[1:3]*weights
-
-    def beta(b):
-        print('开始计算beta')
-        return ((3/b**2)**0.75)/32
-    
-    def omega(rho_01,C):
-        print('开始计算omega')
-        grad2 = (rho_1**2).sum(0)
-        return (C*(grad2**2/rho_01[0]**4)+4*pi*rho_01[0]/3)**0.5
-    
-    def kapa(b,rho_0):
-        print('开始计算kapa')
-        kapa = b*1.5*pi*(rho_0/(9*pi))**(1/6)
-        return kapa
-    
-    def R2(grids):
-        print('开始计算R2')
-        xyz = grids.coords
-        r = ((xyz**2).sum(1))**0.5
-        n = r.shape[0]
-
-        print('开始计算R2')
-
-        R2 = np.zeros([r.shape[0],r.shape[0]])
-        x = time.time()
-        R2 = (r[:,None]-r[None,:])**2
-        y = time.time()
-        print(y-x)
-        return R2 + R2.transpose(1,0)
-    
-    def g(rho_01,C,b,grids):
-        print('开始计算g')
-        return omega(rho_01,C)*R2(grids)+kapa(b,rho_01[0])
-    
-    g = g(rho_01,C,b,grids)
-    assert g.shape[0] == rho_0.shape[0]
-
-    print('开始计算integ')
-    phi = 1/((g*g.transpose(1,0)*(g[:,None]+g[None,:])))
-    integ = 1
-
-    print('开始计算E_VV10')
-    return ((beta(b) + 0.5*integ)*rho_0*weights).sum()
-
-
-
-# 定义原子坐标和基组
 mol = gto.Mole()
 mol.atom = '''
 C                 -0.66295800    0.00000000   -0.00000000
@@ -70,78 +14,86 @@ H                  1.25654334    0.92403753   -0.00000000
 mol.basis = '6-31G*'
 mol.build()
 
-# 获取交换相关泛函及其杂化参数cx
-Func = 'TPSS'
+Func = 'PBE'
+
 mf_hf = dft.RKS(mol)
 mf_hf.xc = Func
-ni = dft.numint.NumInt()
-cx = ni.hybrid_coeff(Func)
-
-# 获取DFT积分格点及其权重
-grids = dft.gen_grid.Grids(mol)
-grids.build()
-weights = grids.weights
-
-# 获取原子轨道格点值
-ao_2 = ni.eval_ao(mol,grids.coords,deriv=2)
-ao_01 = ao_2[:4]
-ao_1 = ao_2[1:4]
-ao_0 = ao_2[0]
-lapl = np.einsum('kgi->gi',ao_2[4:7])
-
-# 生成电子密度的格点值
-def gen_rho(ao_0,ao_1,Dm) :
-
-    rho_0 = np.einsum("gu,gv,uv->g",ao_0,ao_0,Dm)
-    rho_1 = 2*np.einsum("gu,rgv,uv->rg",ao_0,ao_1,Dm)
-    rho_01 = np.vstack([rho_0,rho_1])
-    '''
-    rho_01 = 2*np.einsum("gu,rgv,uv->rg",ao_0,ao,Dm)  # rho_01 = [rho_0,rho_1] 所以这里的第一项要乘以0.5
-    rho_01[0] *= 0.5
-    '''
-    
-    tau = 0.5*np.einsum('uv,kgu,kgv->g',Dm,ao_1,ao_1)
-    rho_01t = np.vstack([rho_01,tau])
-    return rho_0, rho_1, rho_01, rho_01t
-
 mf_hf.kernel()
-Dm = mf_hf.make_rdm1()
-mo_c = mf_hf.mo_coeff
-nocc = mol.nelec[0]
-rho_01t = gen_rho(ao_0,ao_1,Dm)[-1]
-rho_0 = rho_01t[0]
-rho_1 = rho_01t[1:4]
 
-rho = ni.eval_rho(mol,ao_01,Dm,xctype = 'GGA',with_lapl=False)
+td = tdscf.TDA(mf_hf)
+print('PySCF所得激发能')
+td.nstates=6
+td.kernel()
 
-print(rho.shape)
-# print(np.allclose(lapl,rho[-1]))
-print()
+A,B = td.get_ab()
 
-exc, fr = ni.eval_xc(Func,rho_01t,deriv=2)[:2]
-print(fr[3].shape)
+A_size = A.shape[0]*A.shape[1]
+x = time.time()
+# TD_matrix = np.einsum('iakl,kljb->iajb',A+B,A-B)
+TD_matrix = A
+TD_matrix = TD_matrix.reshape(A_size,A_size)
 
-# 获取泛函核的格点值
-exc *= weights
-fg = fr[1]*weights
-ft = fr[3]*weights
-fr = fr[0]*weights
+mo_ene = mf_hf.mo_energy
+nocc = int(mol.nelectron)//2
+e_ia = (mo_ene[nocc:].reshape(-1,1) - mo_ene[:nocc]).T
+hdiag = e_ia.ravel()
 
+# vind,hdiag = td.gen_vind()
 
-# 获取交换相关势, 用到了交换相关势对uv指标的对称性
-Fxc = (
-+ 0.5 * np.einsum("g, gu, gv -> uv",fr, ao_0, ao_0)
-+ 2 * np.einsum("g, rg, rgu, gv -> uv", fg, rho_1, ao_1, ao_0)
-)
-Fxc = Fxc+ Fxc.swapaxes(-1,-2)
+# V = np.eye(A_size,A_size)
+# TD_matrix = np.array(vind(V))
 
-Fxc += 0.5*np.einsum('g,kgu,kgv->uv',ft,ao_1,ao_1)
+k = 6
+eig = 2*k
+V_old = np.zeros([A_size,eig])
+hdiag = hdiag.reshape(-1,)
+Dsort = hdiag.argsort()
+for j in range(k):
+    V_old[Dsort[j], j] = 1.0
 
+max_iter = 50
+for i in range(max_iter):
+    
+    W_old = np.einsum("ki,il->kl",TD_matrix,V_old)
+    
+    sub_A = np.einsum("ik,il->kl",V_old,W_old)
+    
+    val,ket = np.linalg.eigh(sub_A)
+    
+    sub_val = val[:k]
+    sub_ket = ket[:,:k]
 
-E_xc = (exc*rho_01t[0]).sum()
-xc_n, xc_e, xc_v = ni.nr_rks(mol, grids, "TPSS", Dm)
-print(np.allclose(xc_v,Fxc))
-print(f'Exc_PySCF = {xc_e}')
-print(f'Exc = {E_xc}')
+    residual = np.einsum("ki,il->kl",W_old,sub_ket) - np.einsum("l,ki,il->kl",sub_val,V_old,sub_ket)
+    #print(np.linalg.norm(W_old))
+    r_norm = np.linalg.norm(residual,axis=0).tolist()
+    #print(r_norm)
+    max_norm = np.max(r_norm)
+    if i>2 and max_norm < 1e-8:
+        y = time.time()
+        break
 
-# print(E_VV10(rho_01,5.9,0.0083,grids))
+    t = 1e-8
+    D = np.repeat(hdiag.reshape(-1,1), k, axis=1) - sub_val
+    D = np.where( abs(D) < t, np.sign(D)*t, D)
+    new_guess = residual/D
+
+    V_new = np.hstack([V_old,new_guess])
+    V_old,_ = np.linalg.qr(V_new)
+
+Hartree_to_eV = 27.211385050
+
+print(f'Davidson:{sub_val*Hartree_to_eV}，耗时{y-x:.6f}')
+
+x1 = time.time()
+val,_ = np.linalg.eigh(TD_matrix)
+y1 = time.time()
+print(f'numpy.eigh:{val[:k]*Hartree_to_eV}，耗时{y1-x1:.6f}')
+
+X_ia = np.zeros([A_size,k])
+for i in range(k):
+    eqn = TD_matrix - sub_val[i]*np.eye(A_size)
+    r = np.zeros(A_size)
+    X_ia[:,i] = np.linalg.solve(eqn,r)
+print(r.shape)
+X_ia = X_ia.reshape(A.shape[0],A.shape[1],-1)
+print(np.linalg.solve(eqn,r))
