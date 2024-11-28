@@ -1,5 +1,7 @@
 import numpy as np
-from pyscf import gto,dft,tdscf,lib
+from scipy import special
+import numpy
+from pyscf import gto,dft,tdscf,lib,scf
 import time
 from functools import partial
 np.einsum = partial(np.einsum,optimize=["greedy", 1024 ** 3 * 40 / 8])
@@ -22,57 +24,24 @@ mol.atom = '''
  H                 -3.93397400    0.86093900    0.07829100
  H                 -3.93390500   -0.86104600   -0.07801600
 '''
-mol.charge = 1
-mol.spin = 1
 mol.basis = 'sto-3g'
 mol.build()
+
+mf = dft.RKS(mol)
+mf.kernel()
+
+td = tdscf.TDA(mf)
+A = td.get_ab()[0]
+_,hdiag = td.gen_vind()
+A_size =A.shape[0]*A.shape[1]
+A = A.reshape(A_size,A_size)
+print(np.sort(np.diagonal(A))-np.sort(hdiag))
+
+'''
 int1e_r = mol.intor_symmetric('int1e_r', comp=3)
 
-mf = dft.UKS(mol)
-mf.xc = 'PBE'
-mf.kernel()
-td = tdscf.TDA(mf)
-td.kernel()
-xy = td.xy[0][0]
-dipole = td.transition_dipole()
-'''
-dm = mf.make_rdm1()[0]
-print(dm.shape)
-dipole = np.einsum('xuv,uv',int1e_r,dm)
-'''
-mol.atom = '''
- C                  1.69091000   -0.00000900    0.00005600
- C                  1.02087600    1.23401200    0.11547300
- C                 -0.35141400    1.24115600    0.12060300
- C                 -1.06641700    0.00002400   -0.00004200
- C                 -0.35141700   -1.24115400   -0.12043100
- C                  1.02086700   -1.23402500   -0.11525900
- H                  1.59903700    2.14730700    0.19073200
- H                 -0.90322200    2.17148500    0.21249700
- H                 -0.90326700   -2.17146900   -0.21223300
- H                  1.59900600   -2.14734500   -0.19037800
- N                  3.16510300    0.00002700   -0.00006700
- O                  3.70857600   -1.04975800    0.32016200
- O                  3.70858700    1.04973800   -0.32029700
- N                 -2.39959000    0.00001100   -0.00024900
- H                 -2.93397400    0.86093900    0.07829100
- H                 -2.93390500   -0.86104600   -0.07801600
-'''
-mol.build()
-int1e_r1 = mol.intor_symmetric('int1e_r', comp=3)
-print((int1e_r-int1e_r1)[0])
 
-mf1 = dft.UKS(mol)
-mf1.xc = 'PBE'
-mf1.kernel()
-td1 = tdscf.TDA(mf1)
-td1.kernel()
-xy1 = td1.xy[0][0]
-dipole1 = td1.transition_dipole()
-os1 = td1.oscillator_strength()
-os = td.oscillator_strength()
-print(os1-os)
-'''
+
 dm1 = mf.make_rdm1()[0]
 dipole1 = np.einsum('xuv,uv',int1e_r1,dm)
 '''
@@ -182,3 +151,4 @@ print(f)
 vind,_ = td.gen_vind()
 A = np.ones([8*28,4])
 print(vind(A.T).T.shape)'''
+

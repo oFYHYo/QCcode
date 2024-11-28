@@ -97,6 +97,9 @@ class TDA:
             V_new = np.hstack([V_old,new_guess])
             V_old,_ = np.linalg.qr(V_new)
 
+        else:
+            raise ValueError('Davidson不收敛')
+        
         self.e = sub_val[:k]
         self.xy = np.einsum("ki,il->kl",V_old,sub_ket)*np.sqrt(.5)
         
