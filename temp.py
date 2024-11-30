@@ -34,7 +34,7 @@ td = tdscf.TDA(mf)
 A = td.get_ab()[0]
 _,hdiag = td.gen_vind()
 A_size =A.shape[0]*A.shape[1]
-A = A.reshape(A_size,A_size)
+#A = A.reshape(A_size,A_size)
 print(np.sort(np.diagonal(A))-np.sort(hdiag))
 
 '''
