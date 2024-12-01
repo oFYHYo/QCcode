@@ -53,10 +53,9 @@ class RT_TDDFT:
 
     def propagate(self):
         '''对密度矩阵进行实时传播
+        '''
         
-        
-             '''
-
+        nocc = self.mol.nelec[0]
         timestep = self.timestep
         get_fock = self.mf.get_fock
 
@@ -173,4 +172,12 @@ if __name__ == '__main__':
     dm = mf.make_rdm1()
     mo_c = mf.mo_coeff
     print()
-    print(np.diag(np.einsum('iu,uv,vj->ij',np.linalg.inv(mo_c),dm,np.linalg.inv(mo_c.T))))
+    #print(np.diag(np.einsum('iu,uv,vj->ij',np.linalg.inv(mo_c),dm,np.linalg.inv(mo_c.T))))
+
+    rt_td = RT_TDDFT(mf)
+    rt_td.maxstep=100
+    rt_td.propagate()
+    A = np.einsum('iu,uv,vj->ij',np.linalg.inv(mo_c),rt_td.dm[0],np.linalg.inv(mo_c.T))
+    dm1 = 2*mo_c[:,:nocc].T@mo_c[:,:nocc]
+    print(np.where(dm1>1e-8,dm1,0))
+    #rt_td.plot()
