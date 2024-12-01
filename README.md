@@ -16,6 +16,7 @@
 ### 待实现功能
 
 - RT-TDDFT（正在开发中）
+- Coupled Cluster（正在开发中）
 - AIMD
 - Surface Hopping
 
