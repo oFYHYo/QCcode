@@ -26,7 +26,7 @@ mol.atom = '''
 '''
 mol.basis = 'sto-3g'
 mol.build()
-
+'''
 mf = dft.RKS(mol)
 mf.kernel()
 
@@ -36,7 +36,7 @@ _,hdiag = td.gen_vind()
 A_size =A.shape[0]*A.shape[1]
 #A = A.reshape(A_size,A_size)
 print(np.sort(np.diagonal(A))-np.sort(hdiag))
-
+'''
 '''
 int1e_r = mol.intor_symmetric('int1e_r', comp=3)
 
@@ -151,4 +151,5 @@ print(f)
 vind,_ = td.gen_vind()
 A = np.ones([8*28,4])
 print(vind(A.T).T.shape)'''
+
 
