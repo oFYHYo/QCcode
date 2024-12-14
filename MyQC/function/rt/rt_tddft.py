@@ -83,15 +83,18 @@ class RT_TDDFT:
     def get_extenal_field(self,time,type='Gaussian'):
         '''计算外加场大小'''
         if type == 'Gaussian':
-            field = 2*1e-5*exp(-(time-3)**2/(2*0.2**2))
-            #*cos(time*2*pi/1)
-
-        return np.array([field,0,0])
+            field = 8*1e-2*exp(-(time-300)**2/(2*100**2))*cos(time*2*pi/20)
+#
+        return np.array([0,0,field])
     
     def get_dipole(self,u_ao,dm_ao):
         '''计算偶极矩'''
-
-        return np.einsum('xuv,uv->x',u_ao,dm_ao)
+        mol = self.mol
+        charges = mol.atom_charges()
+        coords  = mol.atom_coords()
+        dipole_ele=np.einsum('xuv,uv->x',u_ao,dm_ao).real
+        dipole_nuc=np.einsum('i,ix->x',charges,coords)
+        return -dipole_ele+dipole_nuc
 
     def get_fock_mo(self,dm_mo,external_field=None):
         
@@ -127,7 +130,7 @@ class RT_TDDFT:
 
         Energy[0] = self.mf.energy_tot(dm_ao)
         Dipole[0] = self.get_dipole(u_ao,dm_ao)
-        Density_matrix[0] = dm_ao
+        Density_matrix[0] = dm_mo
         Ext_field[0] = 0
 
         print('   Step          Time         Energy          time_cost                   Dipole')
@@ -172,97 +175,88 @@ class RT_TDDFT:
         import matplotlib.pyplot as plt
         import matplotlib.animation as animation
         
-        fig , ax1 = plt.subplots()
-        dipole_fft = np.fft.fft(self.dipole[:,2])
-        field_fft = np.fft.fft(self.field[:,2])
-        freq = np.fft.fftfreq(self.time.shape[-1])
-        
-        strength = (dipole_fft/field_fft).imag
-        #print(freq)
-        ax1.plot(self.time*0.024,self.dipole[:,0].real,'b',label='energy')
-        
-        ax1.set_ylabel('Dipole moment(a. u.)')
+        # fig , ax1 = plt.subplots()
 
-        # ax2 = ax1.twinx()
-        # ax2.set_ylim(-0.02,0.04)
-        # ax2.plot(self.time,self.field[:,2],'r',label='field')
-        # ax2.set_ylabel('External_field(a. u.)')
-        ax1.set_xlabel('time(fs)')
+        # ax1.plot(self.time*0.024,self.dipole[:,0].real,'b',label='energy')
         
-
-        # lines, labels = ax1.get_legend_handles_labels()
-        # lines2, labels2 = ax2.get_legend_handles_labels()
-        # ax2.legend(lines + lines2, labels + labels2, loc=0)
-        
-        
-
-        
-        ax1.set_title('RT-TDDFT')
-        plt.show()
+        # ax1.set_ylabel('Dipole moment(a. u.)')
 
 
-        '''
+        # ax1.set_xlabel('time(fs)')
+
+        # ax1.set_title('RT-TDDFT')
+        # plt.show()
+        
         grids =  dft.gen_grid.Grids(self.mol)
         grids.build()
         coords = grids.coords
         ni = dft.numint.NumInt()
         ao_0 = ni.eval_ao(self.mol,coords,deriv=0)
-        rho = np.einsum('tuv,ku,kv->tk',self.dm,ao_0,ao_0)
-
-        fig, ax = plt.subplots()
-        x = []
-        y = []
-        tmp = []
-        for i in range(rho.shape[0]):
-            if coords[i,0] == 0 and coords[i,1] == 0 and -2<coords[i,2]<2:
-                x.append(coords[i,2])
-                y.append(rho[])
-
-        temp = ax.plot(coords[],)
-        tmp.append(temp)
         
-        ani = animation.ArtistAnimation(fig, tmp, interval=200, repeat_delay=1000)
-        ani.save("fig.gif", writer='pillow')
-        '''
+        mo_c = self.mo_coeff
+        mo_0 = np.einsum('ui,ku->ik',mo_c,ao_0)
+        rho = np.einsum('tij,ik,jk->tk',self.dm,mo_0,mo_0,optimize=True).real
 
+        idx=[]
+        
+        for i in range(coords.shape[0]):
+            if coords[i,0] == 0 and coords[i,1] == 0 and -3<coords[i,2]<3:
+                idx.append(i)
+        coords = coords[idx,:]
+        rho = rho[:,idx]
+        
+        idex = coords[:,2].argsort()
+        coords = coords[idex,:]
+        rho = rho[:,idex]
+        fig, ax = plt.subplots()
+        ax.set_ylim([-0.5,4])
+        ax.set_xlabel('Length(a. u.)')
+        ax.set_ylabel('Electron density(a. u.)')
+        line=ax.plot(coords[:,2],rho[0,:],color='cornflowerblue')
 
-
-
-
-
+        def update(i):
+            
+            ax.set_title(f'T={(i)*self.timestep:2.2f}a.u.')
+            line[0].set_ydata(rho[i,:])
+            
+            return line
+        ani = animation.FuncAnimation(fig,update,interval=50,frames=range(rho.shape[0]))
+        plt.show()
+        #ani.save("fig.gif")
 
 if __name__ == '__main__':
     mol = gto.M()
     mol.atom = ''' 
- C                  1.20809735    0.69749533   -0.00000000
- C                  0.00000000    1.39499067   -0.00000000
- C                 -1.20809735    0.69749533   -0.00000000
- C                 -1.20809735   -0.69749533   -0.00000000
- C                  0.00000000   -1.39499067   -0.00000000
- C                  1.20809735   -0.69749533   -0.00000000
- H                  2.16038781    1.24730049   -0.00000000
- H                  0.00000000    2.49460097   -0.00000000
- H                 -2.16038781    1.24730049   -0.00000000
- H                 -2.16038781   -1.24730049   -0.00000000
- H                  0.00000000   -2.49460097   -0.00000000
- H                  2.16038781   -1.24730049   -0.00000000
+    He                  0.00000000    0.00000000   -0.30750000
+    He                  0.00000000    0.00000000    0.30750000
+    H                  0.00000000    0.00000000   -1.05850000
+    H                  0.00000000    0.00000000    1.05850000
     '''
     mol.basis = '6-31G*'
     mol.build()
 
     #mf = scf.RHF(mol)
     mf = dft.RKS(mol)
-    Func = 'B3LYP'
+    Func = 'PBE'
     mf.xc = Func
     mf.kernel()
 
     rt_td = RT_TDDFT(mf)
-    rt_td.timestep=0.5
-    rt_td.maxstep=2000
+    rt_td.timestep=0.1
+    rt_td.maxstep=1000
     rt_td.propagate()
-    u_ao = mol.intor_symmetric('int1e_r', comp=3)
+    # dm_ao = mf.make_rdm1()
+    # grids =  dft.gen_grid.Grids(mol)
+    # grids.build()
+    # coords = grids.coords
+    # ni = dft.numint.NumInt()
+    # ao_0 = ni.eval_ao(mol,coords,deriv=0)
     
-
+    # mo_c = rt_td.mo_coeff
+    # mo_0 = np.einsum('ui,ku->ik',mo_c,ao_0)
+    # rho = np.einsum('ij,ik,jk->k',rt_td.dm[0],mo_0,mo_0,optimize=True).real
+    # rho1=ni.get_rho(mol,grids=grids,dm=dm_ao)
+    # print(np.allclose(rho,rho1))
     
     rt_td.plot()
 
