@@ -83,8 +83,9 @@ class RT_TDDFT:
     def get_extenal_field(self,time,type='Gaussian'):
         '''计算外加场大小'''
         if type == 'Gaussian':
-            field = 8*1e-2*exp(-(time-300)**2/(2*100**2))*cos(time*2*pi/20)
-#
+            field = 8*1e-1*exp(-(time-3)**2/(2*0.2**2))
+            #*cos(time*2*pi/20)
+
         return np.array([0,0,field])
     
     def get_dipole(self,u_ao,dm_ao):
@@ -200,7 +201,7 @@ class RT_TDDFT:
         idx=[]
         
         for i in range(coords.shape[0]):
-            if coords[i,0] == 0 and coords[i,1] == 0 and -3<coords[i,2]<3:
+            if coords[i,0] == 0 and coords[i,1] == 0 and -4<coords[i,2]<4:
                 idx.append(i)
         coords = coords[idx,:]
         rho = rho[:,idx]
@@ -222,15 +223,15 @@ class RT_TDDFT:
             return line
         ani = animation.FuncAnimation(fig,update,interval=50,frames=range(rho.shape[0]))
         plt.show()
-        #ani.save("fig.gif")
+        ani.save("fig1.gif")
 
 if __name__ == '__main__':
     mol = gto.M()
     mol.atom = ''' 
-    He                  0.00000000    0.00000000   -0.30750000
-    He                  0.00000000    0.00000000    0.30750000
-    H                  0.00000000    0.00000000   -1.05850000
-    H                  0.00000000    0.00000000    1.05850000
+ C                  0.00000000    0.00000000   -0.59750000
+ C                  0.00000000    0.00000000    0.59750000
+ H                  0.00000000    0.00000000   -1.65850000
+ H                  0.00000000    0.00000000    1.65850000
     '''
     mol.basis = '6-31G*'
     mol.build()
