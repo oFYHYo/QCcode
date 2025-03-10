@@ -153,3 +153,13 @@ A = np.ones([8*28,4])
 print(vind(A.T).T.shape)'''
 
 
+def func(vec):
+    x=vec[0]
+    y=vec[1]
+    return [x**2-2*x-1,y**3-y*2+1]
+from scipy import optimize
+a=optimize.newton_krylov(
+    func,
+[3,4]
+)
+print(a,func(a))

@@ -1,159 +1,182 @@
 import numpy as np
-from pyscf import gto,scf
+from pyscf import gto,scf,ao2mo
 import time
 from functools import partial
 
 einsum = partial(np.einsum,optimize=True)
 
-mol = gto.Mole()
-mol.atom = '''
-C                 -0.66295800    0.00000000   -0.00000000
-C                  0.66295800    0.00000000   -0.00000000
-H                 -1.25654334    0.92403753    0.00000000
-H                 -1.25654334   -0.92403753    0.00000000
-H                  1.25654334   -0.92403753    0.00000000
-H                  1.25654334    0.92403753   -0.00000000
-'''
-mol.basis = '6-31G*'
-mol.build()
+class CCD:
+    def __init__(self,mf,max_cycle=100,t2_res=1e-8,ene_res=1e-8):
+        self.mf = mf
+        self.mol = mf.mol
+        self.mo_ene = mf.mo_energy
+        self.mo = mf.mo_coeff
 
-nelec = mol.nelectron
-nocc = int(nelec/2)
+        self.max_cycle = max_cycle
+        self.t2_res=t2_res
+        self.ene_res=ene_res
 
-HF = scf.RHF(mol).run()
-mo = HF.mo_coeff
-mo_ene = HF.mo_energy
-eri = mol.intor("int2e")
+    def gen_ant_eri_mo(self):
+        '''生成自旋轨道基下的反对称双电子积分<ij||kl>'''
+        eri_ao = self.mol.intor("int2e")
+        mo = self.mf.mo_coeff
 
-eri_mo =einsum("up,vq,uvkl,kr,ls->pqrs",mo,mo,eri,mo,mo)
+        from pyscf import ao2mo
+        mo_a = np.zeros((mo.shape[0], mo.shape[1]*2), dtype=mo.dtype)
+        mo_b = np.zeros((mo.shape[0], mo.shape[1]*2), dtype=mo.dtype)
+        for i in range(mo.shape[1]):
+            mo_a[:,2*i] = mo[:,i]
+            mo_b[:,2*i+1] = mo[:,i]
+        eri  = ao2mo.kernel(eri_ao, mo_a)
+        eri += ao2mo.kernel(eri_ao, mo_b)
+        eri1 = ao2mo.kernel(eri_ao, (mo_a,mo_a,mo_b,mo_b))
+        eri += eri1
+        eri += eri1.T
+        # if eri.dtype == np.double:
+        #     eri = ao2mo.restore(1, eri, 28)
+        eri = eri.transpose(0,2,1,3)
+        ant_eri_mo = eri - eri.transpose(0,1,3,2)
 
-ant_eri_mo = (eri_mo.transpose(0,2,1,3) - eri_mo.transpose(0,2,3,1))[nocc:,nocc:,:nocc,:nocc]
-fock = HF.get_fock()
-fock_mo = einsum('ip,pq,qj',mo.T,fock,mo)[nocc:,:nocc]
+        return ant_eri_mo
 
-def CCSD_T1(old_t1,old_t2,fock,ant_eri_mo):
-    t1 = old_t1
-    t2 = old_t2
-    f = fock
-    I = ant_eri_mo
+    def get_energy(self,amp,w):
+        '''计算CCD相关能'''
+        t2 = amp
+        return 0.25*einsum('ijab,abij->', w.Ioovv, t2)
 
-    T1 = 1.0*einsum('ai->ai', f)
-    T1 += -1.0*einsum('ji,aj->ai', f, t1)
-    T1 += 1.0*einsum('ab,bi->ai', f, t1)
-    T1 += -1.0*einsum('jb,abji->ai', f, t2)
-    T1 += -1.0*einsum('jaib,bj->ai', I, t1)
-    T1 += 0.5*einsum('jkib,abkj->ai', I, t2)
-    T1 += -0.5*einsum('jabc,cbji->ai', I, t2)
-    T1 += -1.0*einsum('jb,bi,aj->ai', f, t1, t1)
-    T1 += -1.0*einsum('jkib,aj,bk->ai', I, t1, t1)
-    T1 += 1.0*einsum('jabc,ci,bj->ai', I, t1, t1)
-    T1 += -0.5*einsum('jkbc,aj,cbki->ai', I, t1, t2)
-    T1 += -0.5*einsum('jkbc,ci,abkj->ai', I, t1, t2)
-    T1 += 1.0*einsum('jkbc,cj,abki->ai', I, t1, t2)
-    T1 += 1.0*einsum('jkbc,ci,aj,bk->ai', I, t1, t1, t1)
+    def update_amp(self,amp,w):
+        '''更新t2振幅'''
+        t2=amp
+        eabij = w.eabij
+        
+        res  = w.Ivvoo.copy()
+
+        res += 0.5*einsum('klij,abkl->abij',w.Ioooo,t2)
+        res += 0.5*einsum('abcd,cdij->abij',w.Ivvvv,t2)
+        
+        tmp = einsum('kbcj,acik->abij',w.Iovvo,t2)
+        tmp1 = tmp-tmp.transpose(1,0,2,3)
+        res += tmp1-tmp1.transpose(0,1,3,2)
+
+        tmp = einsum('klcd,acik,dblj->abij',w.Ioovv,t2,t2)
+        tmp1 = tmp-tmp.transpose(1,0,2,3)
+        res += 0.5*(tmp1-tmp1.transpose(0,1,3,2))
+
+        res += 0.25*einsum('klcd,cdij,abkl->abij',w.Ioovv,t2,t2)
+
+        tmp = einsum('klcd,acij,bdkl->abij',w.Ioovv,t2,t2)
+        tmp1 = tmp-tmp.transpose(1,0,2,3)
+        res -= 0.5*tmp1
+
+        tmp = einsum('klcd,abik,cdjl->abij',w.Ioovv,t2,t2)
+        tmp1 = tmp-tmp.transpose(0,1,3,2)
+        res -= 0.5*tmp1
+
+        t2_new = res/eabij
+
+        return t2_new
     
-    return T1
+    def gen_init_amp(self,w):
+        '''计算t2振幅初猜（MP2振幅）'''
+        return w.Ivvoo/w.eabij
 
-def CCSD_T2(old_t1,old_t2,fock,ant_eri_mo):
-    f = fock
-    I = ant_eri_mo
-    t1 = old_t1
-    t2 = old_t2
+    # def diis(self,X_old):
+    #     from numpy import linalg
 
-    T2  = 1.0*einsum('baji->abij', I)
-    T2 += 1.0*einsum('ki,bakj->abij', f, t2)
-    T2 += -1.0*einsum('kj,baki->abij', f, t2)
-    T2 += 1.0*einsum('ac,bcji->abij', f, t2)
-    T2 += -1.0*einsum('bc,acji->abij', f, t2)
-    T2 += -1.0*einsum('kaji,bk->abij', I, t1)
-    T2 += 1.0*einsum('kbji,ak->abij', I, t1)
-    T2 += -1.0*einsum('baic,cj->abij', I, t1)
-    T2 += 1.0*einsum('bajc,ci->abij', I, t1)
-    T2 += -0.5*einsum('klji,balk->abij', I, t2)
-    T2 += 1.0*einsum('kaic,bckj->abij', I, t2)
-    T2 += -1.0*einsum('kajc,bcki->abij', I, t2)
-    T2 += -1.0*einsum('kbic,ackj->abij', I, t2)
-    T2 += 1.0*einsum('kbjc,acki->abij', I, t2)
-    T2 += -0.5*einsum('bacd,dcji->abij', I, t2)
-    T2 += -1.0*einsum('kc,ak,bcji->abij', f, t1, t2)
-    T2 += 1.0*einsum('kc,bk,acji->abij', f, t1, t2)
-    T2 += 1.0*einsum('kc,ci,bakj->abij', f, t1, t2)
-    T2 += -1.0*einsum('kc,cj,baki->abij', f, t1, t2)
-    T2 += 1.0*einsum('klji,bk,al->abij', I, t1, t1)
-    T2 += 1.0*einsum('kaic,cj,bk->abij', I, t1, t1)
-    T2 += -1.0*einsum('kajc,ci,bk->abij', I, t1, t1)
-    T2 += -1.0*einsum('kbic,cj,ak->abij', I, t1, t1)
-    T2 += 1.0*einsum('kbjc,ci,ak->abij', I, t1, t1)
-    T2 += 1.0*einsum('bacd,di,cj->abij', I, t1, t1)
-    T2 += 1.0*einsum('klic,ak,bclj->abij', I, t1, t2)
-    T2 += -1.0*einsum('klic,bk,aclj->abij', I, t1, t2)
-    T2 += 0.5*einsum('klic,cj,balk->abij', I, t1, t2)
-    T2 += -1.0*einsum('klic,ck,balj->abij', I, t1, t2)
-    T2 += -1.0*einsum('kljc,ak,bcli->abij', I, t1, t2)
-    T2 += 1.0*einsum('kljc,bk,acli->abij', I, t1, t2)
-    T2 += -0.5*einsum('kljc,ci,balk->abij', I, t1, t2)
-    T2 += 1.0*einsum('kljc,ck,bali->abij', I, t1, t2)
-    T2 += 0.5*einsum('kacd,bk,dcji->abij', I, t1, t2)
-    T2 += -1.0*einsum('kacd,di,bckj->abij', I, t1, t2)
-    T2 += 1.0*einsum('kacd,dj,bcki->abij', I, t1, t2)
-    T2 += -1.0*einsum('kacd,dk,bcji->abij', I, t1, t2)
-    T2 += -0.5*einsum('kbcd,ak,dcji->abij', I, t1, t2)
-    T2 += 1.0*einsum('kbcd,di,ackj->abij', I, t1, t2)
-    T2 += -1.0*einsum('kbcd,dj,acki->abij', I, t1, t2)
-    T2 += 1.0*einsum('kbcd,dk,acji->abij', I, t1, t2)
-    T2 += 0.5*einsum('klcd,adji,bclk->abij', I, t2, t2)
-    T2 += -1.0*einsum('klcd,adki,bclj->abij', I, t2, t2)
-    T2 += -0.5*einsum('klcd,baki,dclj->abij', I, t2, t2)
-    T2 += -0.5*einsum('klcd,bdji,aclk->abij', I, t2, t2)
-    T2 += 1.0*einsum('klcd,bdki,aclj->abij', I, t2, t2)
-    T2 += 0.25*einsum('klcd,dcji,balk->abij', I, t2, t2)
-    T2 += -0.5*einsum('klcd,dcki,balj->abij', I, t2, t2)
-    T2 += -1.0*einsum('klic,cj,bk,al->abij', I, t1, t1, t1)
-    T2 += 1.0*einsum('kljc,ci,bk,al->abij', I, t1, t1, t1)
-    T2 += -1.0*einsum('kacd,di,cj,bk->abij', I, t1, t1, t1)
-    T2 += 1.0*einsum('kbcd,di,cj,ak->abij', I, t1, t1, t1)
-    T2 += -1.0*einsum('klcd,ak,dl,bcji->abij', I, t1, t1, t2)
-    T2 += -0.5*einsum('klcd,bk,al,dcji->abij', I, t1, t1, t2)
-    T2 += 1.0*einsum('klcd,bk,dl,acji->abij', I, t1, t1, t2)
-    T2 += -1.0*einsum('klcd,di,ak,bclj->abij', I, t1, t1, t2)
-    T2 += 1.0*einsum('klcd,di,bk,aclj->abij', I, t1, t1, t2)
-    T2 += -0.5*einsum('klcd,di,cj,balk->abij', I, t1, t1, t2)
-    T2 += 1.0*einsum('klcd,di,ck,balj->abij', I, t1, t1, t2)
-    T2 += 1.0*einsum('klcd,dj,ak,bcli->abij', I, t1, t1, t2)
-    T2 += -1.0*einsum('klcd,dj,bk,acli->abij', I, t1, t1, t2)
-    T2 += -1.0*einsum('klcd,dj,ck,bali->abij', I, t1, t1, t2)
-    T2 += 1.0*einsum('klcd,di,cj,bk,al->abij', I, t1, t1, t1, t1)
-    
-    return T2
+    #     for X
 
-def CCSD_E(t1,t2,fock,ant_eri_mo):
-    f = fock
-    I = ant_eri_mo
+    #     return X_new
 
-    E  = 1.0*einsum('ia,ai->', f, t1)
-    E += 0.25*einsum('ijab,baji->', I, t2)
-    E += -0.5*einsum('ijab,bi,aj->', I, t1, t1)
 
-    return E
+    def kernel(self):
+        ant_eri_mo = self.gen_ant_eri_mo()
+        w = self.CCD_w(self.mf,ant_eri_mo)
 
-def update(old_t1,old_t2,fock,ant_eri_mo):
+        t2_init = self.gen_init_amp(w)
+        ene_init = self.get_energy(t2_init,w)
+        print(f'初始MP2能量为{ene_init:3.6f}')
 
-    E = CCSD_E(old_t1,old_t2,fock,ant_eri_mo)
-    t1 = CCSD_T1(old_t1,old_t2,fock,ant_eri_mo)
-    t2 = CCSD_T2(old_t1,old_t2,fock,ant_eri_mo)
+        t2 = t2_init
+        ene = ene_init
+        for i in range(self.max_cycle):
+            t2_new = self.update_amp(t2,w)
+            ene_new = self.get_energy(t2_new,w)
+            
+            t2_res = np.linalg.norm(abs(t2_new-t2))
+            ene_res = abs(ene_new-ene)
+            if t2_res <= self.t2_res and ene_res <= self.ene_res:
+                break
 
-    return t1,t2,E
+            t2 = t2_new
+            ene = ene_new
 
-old_t1 = np.zeros_like(fock_mo)
-old_t2 = np.zeros_like(eri_mo)
-old_E = 1
-for i in range(100):
-    t1,t2,E = update(old_t1,old_t2,fock_mo,ant_eri_mo)
-    print(i,E)
-    
-    if abs(old_E-E) < 1.e-8:
-        break
-    
-    old_E = E.copy()
-    old_t1 = t1.copy()
-    old_t2 = t2.copy()
+            
+            print(f'iter            E_corr                 |e|                  |t2|')
+            print(f'{i:2}          {ene:12.8f}         {ene_res:12.8f}          {t2_res:12.8f}')
+        
+        self.t2 = t2
+        self.ecorr = ene
+        return self.ecorr
+
+
+    class CCD_w:
+        '''存放一些需要用到的中间量'''
+        def __init__(self,mf,ant_eri_mo):
+            nocc = mf.mol.nelectron
+            mo_ene = mf.mo_energy
+            e = np.vstack([mo_ene,mo_ene]).T.reshape(2*mo_ene.shape[0])
+            self.eabij = -e[nocc:,None,None,None]+e[None,None,:nocc,None]-e[None,nocc:,None,None]+e[None,None,None,:nocc]
+
+            f = np.diag(e)
+            I = ant_eri_mo
+
+
+            self.foo = f[:nocc,:nocc]
+            self.fvv = f[nocc:,nocc:]
+            self.fov = f[:nocc,nocc:]
+            self.fvo = f[nocc:,:nocc]
+
+            self.Ioooo = I[:nocc,:nocc,:nocc,:nocc]
+            self.Iooov = I[:nocc,:nocc,:nocc,nocc:]
+            self.Ioovo = I[:nocc,:nocc,nocc:,:nocc]
+            self.Iovoo = I[:nocc,nocc:,:nocc,:nocc]
+            self.Ivooo = I[nocc:,:nocc,:nocc,:nocc]
+            self.Ioovv = I[:nocc,:nocc,nocc:,nocc:]
+            self.Iovov = I[:nocc,nocc:,:nocc,nocc:]
+            self.Ivoov = I[nocc:,:nocc,:nocc,nocc:]
+            self.Iovvo = I[:nocc,nocc:,nocc:,:nocc]
+            self.Ivovo = I[nocc:,:nocc,nocc:,:nocc]
+            self.Ivvoo = I[nocc:,nocc:,:nocc,:nocc]
+            self.Ivvvo = I[nocc:,nocc:,nocc:,:nocc]
+            self.Ivvov = I[nocc:,nocc:,:nocc,nocc:]
+            self.Ivovv = I[nocc:,:nocc,nocc:,nocc:]
+            self.Iovvv = I[:nocc,nocc:,nocc:,nocc:]
+            self.Ivvvv = I[nocc:,nocc:,nocc:,nocc:]
+        
+if __name__ == '__main__':
+    mol = gto.Mole()
+    mol.atom =''' 
+    C                 -0.66295800    0.00000000   -0.00000000
+    C                  0.66295800    0.00000000   -0.00000000
+    H                 -1.25654334    0.92403753    0.00000000
+    H                 -1.25654334   -0.92403753    0.00000000    
+    H                  1.25654334   -0.92403753    0.00000000
+    H                  1.25654334    0.92403753   -0.00000000
+    '''
+    mol.basis = 'sto-3g'
+    mol.build()
+    HF = scf.RHF(mol).run()
+
+    # PySCF CCD
+    from pyscf.cc import ccd
+    pyscf_ccd = ccd.CCD(HF)
+    pyscf_ccd.kernel()
+    pyscf_ene = pyscf_ccd.e_corr
+
+    # My CCD
+    myccd = CCD(HF)
+    myccd.kernel()
+    my_ene = myccd.ecorr
+
+    print(f'PySCF\'s CCD correction energy = {pyscf_ene:2.8f}')
+    print(f'My CCD correction energy = {my_ene:2.8f}')
