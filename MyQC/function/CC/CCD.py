@@ -178,5 +178,5 @@ if __name__ == '__main__':
     myccd.kernel()
     my_ene = myccd.ecorr
 
-    print(f'PySCF\'s CCD correction energy = {pyscf_ene:2.8f}')
-    print(f'My CCD correction energy = {my_ene:2.8f}')
+    print(f'PySCF\'s CCD correlation energy = {pyscf_ene:2.8f}')
+    print(f'My CCD correlation energy = {my_ene:2.8f}')
