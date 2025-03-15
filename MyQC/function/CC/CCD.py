@@ -163,7 +163,7 @@ if __name__ == '__main__':
     H                  1.25654334   -0.92403753    0.00000000
     H                  1.25654334    0.92403753   -0.00000000
     '''
-    mol.basis = 'sto-3g'
+    mol.basis = '6-311G**'
     mol.build()
     HF = scf.RHF(mol).run()
 
