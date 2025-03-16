@@ -150,7 +150,8 @@ class CCSD:
 
             if self.use_diis:
                 diis.append([t1_new,t2_new])
-                if i > 2:
+
+                if i > 1:
                     t1,t2 = diis.update()
 
                 else:
@@ -184,23 +185,18 @@ class CCSD:
             self.diis_iter = diis_iter
             self.diis_res_t1 = [amp[0].copy()]
             self.diis_res_t2 = [amp[1].copy()]
-            self.err_vec = None
+            self.err_vec = []
             self.oldt1 = amp[0].copy()
             self.oldt2 = amp[1].copy()
 
         def append(self,amp):
-            '''添加新的振幅并计算误差矢量'''
             self.diis_res_t1.append(amp[0].copy())
             self.diis_res_t2.append(amp[1].copy())
 
             err_t1 = (self.diis_res_t1[-1]-self.oldt1).ravel()
             err_t2 = (self.diis_res_t2[-1]-self.oldt2).ravel()
             err = np.concatenate((err_t1,err_t2))
-
-            if self.err_vec is None:
-                self.err_vec = err
-            else:
-                self.err_vec = np.vstack([self.err_vec,err])
+            self.err_vec.append(err)
 
             self.oldt1 = amp[0].copy()
             self.oldt2 = amp[1].copy()
@@ -208,21 +204,24 @@ class CCSD:
             if len(self.diis_res_t1) > self.diis_iter:
                 self.diis_res_t1.pop(0)
                 self.diis_res_t2.pop(0)
-                self.err_vec = np.delete(self.err_vec,0,axis=0)
+                self.err_vec.pop(0)
+
         
         def gen_Bmatrix(self,err_vec):
             '''生成B matrix'''
-            B = np.zeros([err_vec.shape[0]+1,err_vec.shape[0]+1])
+            B = np.zeros((len(err_vec)+1,len(err_vec)+1))
             B[:,-1] = -1
             B[-1,:] = -1
             B[-1,-1] = 0
-            B[:-1,:-1] = np.einsum('ik,jk->ij',err_vec,err_vec)
+            for i in range(len(err_vec)):
+                for j in range(len(err_vec)):
+                    B[i,j] = np.dot(err_vec[i],err_vec[j])
             B[:-1,:-1] /= abs(B[:-1,:-1]).max()
 
             return B
 
         def update(self):
-            '''更新振幅'''
+
             B = self.gen_Bmatrix(self.err_vec)
             b = np.zeros(B.shape[0])
             b[-1] = -1
@@ -240,7 +239,7 @@ class CCSD:
             self.oldt2 = t2_new.copy()
             return [t1_new,t2_new]
         
-   
+
     class CC_w:
         '''存放一些需要用到的中间量'''
         def __init__(self,mf,ant_eri_mo):
