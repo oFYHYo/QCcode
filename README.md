@@ -13,12 +13,12 @@
 - MP2
 - Full CI
 - RT-TDDFT
-- CCD
-
-### 待实现功能
-
+- CCD,CCSD with diis
 - AIMD
-- Surface Hopping
 
+### 待实现(完善)功能
+
+- CIS gradient
+- Surface Hopping
 
 ps：目前仅为测试版本
