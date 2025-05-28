@@ -22,18 +22,17 @@ def calc_cis_grad(cis,x):
     计算单电子密度矩阵
     '''
 
-    # 计算弛豫密度矩阵的对角元
+    # 计算密度矩阵的对角元
     P_delta_mo = np.zeros_like(dm)
     P_delta_mo[:nocc,:nocc] = -einsum('ia,ja->ij',x,x)*2
     P_delta_mo[nocc:,nocc:] = einsum('ia,ib->ab',x,x)*2
 
-    # 计算弛豫密度矩阵的非对角元
-
+    # 计算密度矩阵的非对角元
     z = CPHF(mf,x,P_delta_mo)
     P_delta_mo[nocc:,:nocc] = z*2
 
     opdm = dm + einsum('pq,up,vq->uv',P_delta_mo,mo_c,mo_c)
-    # print(np.allclose(opdm,dmz1doo),np.linalg.norm(opdm-dmz1doo))
+    #print(np.allclose(opdm,dmz1doo),np.linalg.norm(opdm-dmz1doo))
     #opdm = dmz1doo
     '''
     计算双电子密度矩阵
@@ -46,36 +45,36 @@ def calc_cis_grad(cis,x):
     '''
     计算权重密度矩阵
     '''
+    
     eri = mf._eri
     eri_mo = ao2mo.kernel(eri,mo_c,compact=False)
     eri_mo = eri_mo.reshape(nmo,nmo,nmo,nmo)
-    eri_mo = eri_mo.transpose(0,2,1,3)
-    ant_eri_mo = 2*eri_mo - eri_mo.transpose(0,1,3,2)
-
+    eri_mo_ = eri_mo.transpose(0,2,1,3)
+    ant_eri_mo = 2*eri_mo_ - eri_mo_.transpose(0,1,3,2)
+    
     wdm = calc_wdm(mf)
 
     wdm_delta = np.zeros_like(wdm)
-    wdm_delta[:nocc,:nocc] -= einsum('pq,plqk->kl',P_delta_mo,ant_eri_mo[:,:nocc,:,:nocc])
-    wdm_delta[:nocc,:nocc] -= einsum('ia,lb,akib->kl',x,x,ant_eri_mo[nocc:,:nocc,:nocc,nocc:])*2
-    wdm_delta[:nocc,:nocc] -= einsum('kl,l->kl',P_delta_mo[:nocc,:nocc],mo_ene[:nocc])
+    P_delta_mo1 = np.zeros_like(dm)
+    P_delta_mo1[:nocc,:nocc] = -einsum('ia,ja->ij',x,x)*2
+    P_delta_mo1[nocc:,nocc:] = einsum('ia,ib->ab',x,x)*2
+    P_delta_mo1[nocc:,:nocc] = z
+    P_delta_mo1[:nocc,nocc:] = z.T
+    wdm_delta[:nocc,:nocc] -= einsum('pq,plqk->kl',P_delta_mo1,ant_eri_mo[:,:nocc,:,:nocc])
+    wdm_delta[:nocc,:nocc] -= einsum('ajkb,jb,ia->ki',ant_eri_mo[nocc:,:nocc,:nocc,nocc:],x,x)*2
 
-    wdm_delta[nocc:,nocc:] -= einsum('ac,c->ac',P_delta_mo[nocc:,nocc:],mo_ene[nocc:])
-    wdm_delta[nocc:,nocc:] -= einsum('ia,jb,jcbi->ab',x,x,ant_eri_mo[:nocc,nocc:,nocc:,:nocc])*2
+    wdm_delta[nocc:,nocc:] -= einsum('cjib,jb,ia->ac',ant_eri_mo[nocc:,:nocc,:nocc,nocc:],x,x)*2
+
+    wdm_delta[nocc:,:nocc] -= einsum('kjib,jb,ia->ak',ant_eri_mo[:nocc,:nocc,:nocc,nocc:],x,x)*4
+
     
-    wdm_delta[nocc:,:nocc] -= einsum('ak,k->ak',P_delta_mo[nocc:,:nocc],mo_ene[:nocc])*2
-    wdm_delta[nocc:,:nocc] -= einsum('ia,jb,jkbi->ak',x,x,ant_eri_mo[:nocc,:nocc,nocc:,:nocc])*4
-
-
-    # zeta = (mo_ene[:,None] + mo_ene[None,:]) * .5
-    # zeta[nocc:,:nocc] = mo_ene[:nocc]
-    # zeta[:nocc,nocc:] = mo_ene[nocc:]
-    #dm1 = P_delta_mo.copy()
-    #dm1[:nocc,:nocc] += np.eye(nocc)*2 # for ground state
-    #wdm_delta -= dm1*zeta
-    
+    zeta = (mo_ene[:,None] + mo_ene[None,:]) * .5
+    zeta[nocc:,:nocc] = mo_ene[:nocc]
+    zeta[:nocc,nocc:] = mo_ene[nocc:]
+    dm1 = P_delta_mo.copy()
+    wdm_delta -= dm1*zeta
+  
     wdm = wdm + einsum('pq,up,vq->uv',wdm_delta,mo_c,mo_c)
-
-    #print(np.allclose(tmp1,wdm1),np.linalg.norm(tmp1-wdm1),(wdm1)[nocc:,:nocc])
     #wdm = wdm1
     
 
@@ -92,7 +91,6 @@ def calc_cis_grad(cis,x):
            + einsum('uv,Axuv->Ax',wdm,ovlpx)
            + grad_nuc(mol)
             )
-
 
     return grad
 
@@ -158,14 +156,10 @@ H  0.0  0.7  1.0
     cis.nstates = 10
     cis.kernel()
 
-    atom = []
-    for i in range(mol.natm):
-        atom.append(mol.atom_symbol(i))
-
     k = 1
     cis_grad = cis.Gradients()
     cis_grad.state = k
-    cis_grad.kernel()
+    grad_test = cis_grad.kernel()
 
     X = []
     for i,x in enumerate(cis.xy):
@@ -174,13 +168,15 @@ H  0.0  0.7  1.0
 
     mf = cis._scf
     x = X[k-1]
-    dm = mf.make_rdm1()
-    nocc = mf.mol.nelectron//2
     
     # from cis_grad_test import grad_elec
     # dmz1doo,wdm1 = grad_elec(cis_grad, cis.xy[k-1], singlet=True)
 
     grad = calc_cis_grad(cis,x)
+    #print(np.allclose(grad, grad_test),np.linalg.norm(grad-grad_test))
+    atom = []
+    for i in range(mol.natm):
+        atom.append(mol.atom_symbol(i))
     print(f'--------- My CIS gradients for state {k} ----------')
     for i,g in enumerate(grad):
         print(f'{i:1} {atom[i]:3} {g[0]:12.8f} {g[1]:12.8f} {g[2]:12.8f}')
